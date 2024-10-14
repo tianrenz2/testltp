@@ -2,6 +2,7 @@ import subprocess
 import re
 
 import os
+import sys
 
 # Path to the testcase file
 testcase_file = "testcase"
@@ -19,11 +20,11 @@ base_record_cmdline = """
 -append  "root=/dev/sda rw init=/lib/systemd/systemd tsc=reliable console=ttyS0 mce=off test={test}" \
 -hda /home/projects/kernel-utils/rootfs.img \
 -object memory-backend-file,size=4096M,share,mem-path=/dev/shm/ivshmem,id=hostmem \
--device ivshmem-plain,memdev=hostmem -vnc :00 -D {log} -exit-record 1
+-device ivshmem-plain,memdev=hostmem -vnc :00 -D {log} -exit-record 1 -checkpoint-interval {interval}
 """
 
 base_replay_cmdline = """
-{qemu_bin} -accel tcg -smp 1 -cpu Broadwell -no-hpet -m 2G -kernel /home/projects/linux-6.1.0/arch/x86/boot/bzImage \
+{qemu_bin} -accel tcg -smp 1 -cpu Icelake-Client -no-hpet -m 2G -kernel /home/projects/linux-6.1.0/arch/x86/boot/bzImage \
 -append "root=/dev/sda rw init=/lib/systemd/systemd tsc=reliable console=ttyS0 mce=off test={test}" \
 -hda /home/projects/kernel-utils/rootfs.img -device ivshmem-plain,memdev=hostmem \
 -object memory-backend-file,size=4096M,share,mem-path=/dev/shm/ivshmem,id=hostmem \
@@ -33,7 +34,7 @@ base_replay_cmdline = """
 class TimeoutException(Exception):
     pass
 
-start_point = 16
+start_point = 1012
 
 def get_test_list() -> list:
     tests = []
@@ -54,7 +55,7 @@ def reload_rr():
 
 def run_program(cmdline, ignore_ret=True):
     try:
-        process = subprocess.run(cmdline, shell=True, check=True, timeout=60)
+        process = subprocess.run(cmdline, shell=True, check=True, timeout=80)
     except subprocess.TimeoutExpired as e:
         raise TimeoutException("TIMEOUT")
     except subprocess.CalledProcessError as e:
@@ -108,12 +109,45 @@ def LOG(msg):
     with open(run_log, "a+") as f:
         f.write("{}\n".format(msg))
 
+def record_index():
+    global start_point
+    with open("start_point", 'w') as f:
+        f.write(str(start_point))
+
+def get_index() -> int:
+    with open("start_point", 'r') as f:
+        return int(f.read())
+
+def run_test(test, test_dir, test_interval=1000):
+    succeed = True
+    interval = test_interval
+
+    for i in range(3):
+        record = base_record_cmdline.format(qemu_bin=qemu_path, test=test_dir, log=log_file, interval=interval)
+        try:
+            run_program(record)
+        except TimeoutException as e:
+            interval = interval * 2
+            LOG("{} timeout, try interval {}".format(test, interval))
+            if i == 2:
+                LOG("{} timeout failed".format(test))
+                succeed = False
+            reload_rr()
+        else:
+            break
+
+    return succeed, interval
+
 def run_all_tests():
     tests = get_test_list()
 
     # tests = tests
     index = 0
     retry = 0
+    global start_point
+
+    start_point = get_index()
+    interval = 1000
 
     while index < len(tests):
         if index < start_point:
@@ -124,33 +158,41 @@ def run_all_tests():
         test_dir = "/opt/ltp/testcases/bin/{}".format(test)
         LOG("index={}, test={}".format(index, test))
 
-        record = base_record_cmdline.format(qemu_bin=qemu_path, test=test_dir, log=log_file)
-        try:
-            run_program(record)
-        except TimeoutException as e:
-            LOG("Test[{}] timeout".format(test))
-            reload_rr()
-            index += 1
-            continue
+        succeed, interval = run_test(test, test_dir, interval)
+        if succeed:
+            analyze_summary("./rr-result.txt", "./ltp-result", test)
 
-        analyze_summary("./rr-result.txt", "./ltp-result", test)
-
-        replay = base_replay_cmdline.format(qemu_bin=qemu_path, test=test_dir, log=log_file)
-        try:
-            run_program(replay, ignore_ret=False)
-        except Exception as e:
-            print("Failed to replay {}".format(test))
-            if retry < 2:
-                LOG("Failed test[{}]: {}, retry={}".format(test, str(e), retry))
-                retry += 1
-                continue
+            replay = base_replay_cmdline.format(qemu_bin=qemu_path, test=test_dir, log=log_file)
+            try:
+                run_program(replay, ignore_ret=False)
+            except Exception as e:
+                print("Failed to replay {}".format(test))
+                if retry < 2:
+                    LOG("Failed test[{}]: {}, retry={}".format(test, str(e), retry))
+                    retry += 1
+                    continue
+                else:
+                    LOG("{} give up".format(test))
             else:
-                LOG("Give up test {}".format(test))
+                LOG("{} replay passed".format(test))
         else:
-            LOG("{} replay passed".format(test))
+            LOG("{} is aborted".format(test))
 
         index += 1
         retry = 0
+        start_point = index
+        record_index()
+        interval = 1000
+
 
 reload_rr()
-run_all_tests()
+while True:
+    try:
+        run_all_tests()
+    except Exception as e:
+        print("Failed to run {}".format(str(e)))
+    else:
+        break
+
+# if __name__ == "__main__":
+#     start_point = int(sys.argv[1])
