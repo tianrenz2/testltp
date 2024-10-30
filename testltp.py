@@ -3,16 +3,17 @@ import re
 
 import os
 import sys
+import os
 
 # Path to the testcase file
-testcase_file = "testcase"
+testcase_file = "testcase_interval"
 
 base_dir = "/home/projects/qemu-tcg-kvm/build"
 
 # Path to the qemu executable (adjust this if needed)
 qemu_path = "{}/qemu-system-x86_64".format(base_dir)  # Replace with the actual path to your qemu executable
 log_file = "{}/rec.log".format(base_dir)
-run_log = "./LOG"
+run_log = "./LOG.unformat"
 
 base_record_cmdline = """
 {qemu_bin} -smp 1 -kernel /home/projects/linux-6.1.0/arch/x86/boot/bzImage \
@@ -36,6 +37,9 @@ class TimeoutException(Exception):
 
 start_point = 1012
 
+test_interval_map = {}
+skip_replay = True
+
 def get_test_list() -> list:
     tests = []
     # Read the file and iterate through each line
@@ -45,7 +49,12 @@ def get_test_list() -> list:
             line = line.strip()  # Remove any trailing newline or whitespace
 
             if line:  # Only proceed if the line is not empty
-                tests.append(line)
+                if ":" in line:
+                    test_set = line.split(":")
+                    tests.append(test_set[0])
+                    test_interval_map[test_set[0]] = int(test_set[1])
+                else:
+                    tests.append(line)
 
     return tests
 
@@ -53,9 +62,9 @@ def reload_rr():
     os.system("cd /home/projects/kernel-rr-linux/;sh replace.sh")
 
 
-def run_program(cmdline, ignore_ret=True):
+def run_program(cmdline, ignore_ret=True, timeout=80):
     try:
-        process = subprocess.run(cmdline, shell=True, check=True, timeout=80)
+        process = subprocess.run(cmdline, shell=True, check=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
         raise TimeoutException("TIMEOUT")
     except subprocess.CalledProcessError as e:
@@ -80,25 +89,33 @@ def analyze_summary(log_file, output_file, test_name):
         'skipped': re.compile(r"skipped\s+(\d+)"),
         'warnings': re.compile(r"warnings\s+(\d+)")
     }
+    found = False
 
-    # Read the log file and find the summary section
-    with open(log_file, 'r') as file:
-        for line in file.readlines():
-            # Check and extract the numbers using the patterns
-            if patterns['passed'].search(line):
-                passed_count = int(patterns['passed'].search(line).group(1))
-            elif patterns['failed'].search(line):
-                failed_count = int(patterns['failed'].search(line).group(1))
-            elif patterns['broken'].search(line):
-                broken_count = int(patterns['broken'].search(line).group(1))
-            elif patterns['skipped'].search(line):
-                skipped_count = int(patterns['skipped'].search(line).group(1))
-            elif patterns['warnings'].search(line):
-                warnings_count = int(patterns['warnings'].search(line).group(1))
+    try:
+        # Read the log file and find the summary section
+        with open(log_file, 'r') as file:
+            for line in file.readlines():
+                # Check and extract the numbers using the patterns
+                if patterns['passed'].search(line):
+                    passed_count = int(patterns['passed'].search(line).group(1))
+                    found = True
+                elif patterns['failed'].search(line):
+                    failed_count = int(patterns['failed'].search(line).group(1))
+                elif patterns['broken'].search(line):
+                    broken_count = int(patterns['broken'].search(line).group(1))
+                elif patterns['skipped'].search(line):
+                    skipped_count = int(patterns['skipped'].search(line).group(1))
+                elif patterns['warnings'].search(line):
+                    warnings_count = int(patterns['warnings'].search(line).group(1))
+    except Exception as e:
+        LOG("Read excption: {}".format(str(e)))
 
-    # Write the result in one line to the output file
-    result = (f"{test_name},passed={passed_count},failed={failed_count},"
-              f"broken={broken_count},skipped={skipped_count},warnings={warnings_count}\n")
+    if not found:
+        result = "{} unformated report\n".format(test_name)
+    else:
+        # Write the result in one line to the output file
+        result = (f"{test_name},passed={passed_count},failed={failed_count},"
+                f"broken={broken_count},skipped={skipped_count},warnings={warnings_count}\n")
 
     with open(output_file, 'a+') as out_file:
         out_file.write(result)
@@ -121,17 +138,25 @@ def get_index() -> int:
 def run_test(test, test_dir, test_interval=1000):
     succeed = True
     interval = test_interval
+    upper = 7
 
-    for i in range(3):
+    for i in range(upper):
         record = base_record_cmdline.format(qemu_bin=qemu_path, test=test_dir, log=log_file, interval=interval)
         try:
-            run_program(record)
+            run_program(record, timeout=80)
         except TimeoutException as e:
             interval = interval * 2
-            LOG("{} timeout, try interval {}".format(test, interval))
-            if i == 2:
+            if i == upper - 2:
+                interval = 0
+
+            if i == upper - 1:
                 LOG("{} timeout failed".format(test))
                 succeed = False
+                reload_rr()
+                break
+            else:
+                LOG("{} timeout, try interval {}".format(test, interval))
+
             reload_rr()
         else:
             break
@@ -149,6 +174,8 @@ def run_all_tests():
     start_point = get_index()
     interval = 1000
 
+    reload_rr()
+
     while index < len(tests):
         if index < start_point:
             index += 1
@@ -156,25 +183,36 @@ def run_all_tests():
 
         test = tests[index]
         test_dir = "/opt/ltp/testcases/bin/{}".format(test)
-        LOG("index={}, test={}".format(index, test))
+        LOG("index={}, test={}, interval={}".format(index, test, interval))
 
-        succeed, interval = run_test(test, test_dir, interval)
+        if test in test_interval_map:
+            interval = test_interval_map[test]
+
+        succeed, interval = run_test(test, test_dir, test_interval=interval)
         if succeed:
             analyze_summary("./rr-result.txt", "./ltp-result", test)
 
-            replay = base_replay_cmdline.format(qemu_bin=qemu_path, test=test_dir, log=log_file)
-            try:
-                run_program(replay, ignore_ret=False)
-            except Exception as e:
-                print("Failed to replay {}".format(test))
-                if retry < 2:
-                    LOG("Failed test[{}]: {}, retry={}".format(test, str(e), retry))
-                    retry += 1
-                    continue
+            if interval == 0:
+                try:
+                    os.remove("checkpoint-0")
+                except:
+                    pass
+
+            if not skip_replay:
+                replay = base_replay_cmdline.format(qemu_bin=qemu_path, test=test_dir, log=log_file)
+                try:
+                    run_program(replay, ignore_ret=False, timeout=None)
+                except Exception as e:
+                    LOG("Failed to replay {}".format(test))
+                    reload_rr()
+                    if retry < 2:
+                        LOG("Failed test[{}]: {}, retry={}".format(test, str(e), retry))
+                        retry += 1
+                        continue
+                    else:
+                        LOG("{} give up".format(test))
                 else:
-                    LOG("{} give up".format(test))
-            else:
-                LOG("{} replay passed".format(test))
+                    LOG("{} replay passed interval {}".format(test, interval))
         else:
             LOG("{} is aborted".format(test))
 
@@ -185,7 +223,7 @@ def run_all_tests():
         interval = 1000
 
 
-reload_rr()
+# reload_rr()
 while True:
     try:
         run_all_tests()

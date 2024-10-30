@@ -1,0 +1,38 @@
+io_uring01 give up
+io_uring02 give up
+
+process_vm_readv03 give up
+/*
+kmap_local_page
+
+#0  0xffffffff8146668a in _copy_to_iter (addr=addr@entry=0xffff888007819d90, bytes=10, bytes@entry=87, i=i@entry=0xffffc9000022fdc8) at lib/iov_iter.c:529
+#1  0xffffffff81467289 in copy_page_to_iter (page=0xffffea00001e0640, offset=3472, bytes=bytes@entry=87, i=i@entry=0xffffc9000022fdc8) at lib/iov_iter.c:727
+#2  0xffffffff811b506c in process_vm_rw_pages (vm_write=0, iter=<optimized out>, len=87, offset=<optimized out>, pages=0xffffc9000022fd10) at mm/process_vm_access.c:45
+#3  process_vm_rw_single_vec (task=0xffff8880046c2e80, vm_write=0, mm=0xffff8880061cd400, process_pages=0xffffc9000022fd08, iter=<optimized out>, len=<optimized out>,
+    addr=<optimized out>) at mm/process_vm_access.c:117
+#4  process_vm_rw_core (pid=pid@entry=230, iter=iter@entry=0xffffc9000022fdc8, rvec=rvec@entry=0xffff8880044f0000, riovcnt=riovcnt@entry=1024, vm_write=vm_write@entry=0,
+    flags=0) at mm/process_vm_access.c:215
+#5  0xffffffff811b5387 in process_vm_rw (pid=230, lvec=<optimized out>, liovcnt=<optimized out>, rvec=<optimized out>, riovcnt=1024, flags=<optimized out>, vm_write=0)
+    at mm/process_vm_access.c:283
+#6  0xffffffff811b53de in __do_sys_process_vm_readv (flags=<optimized out>, riovcnt=<optimized out>, rvec=<optimized out>, liovcnt=<optimized out>, lvec=<optimized out>,
+    pid=<optimized out>) at mm/process_vm_access.c:295
+#7  __se_sys_process_vm_readv (flags=<optimized out>, riovcnt=<optimized out>, rvec=<optimized out>, liovcnt=<optimized out>, lvec=<optimized out>, pid=<optimized out>)
+    at mm/process_vm_access.c:291
+#8  __x64_sys_process_vm_readv (regs=<optimized out>) at mm/process_vm_access.c:291
+#9  0xffffffff81837141 in do_syscall_x64 (nr=<optimized out>, regs=0xffffc9000022ff58) at arch/x86/entry/common.c:50
+#10 do_syscall_64 (regs=0xffffc9000022ff58, nr=<optimized out>) at arch/x86/entry/common.c:82
+
+*/
+
+/* exit user */
+ptrace09 give up
+
+// xsave problem
+waitpid01 give up 
+
+// queue full
+statx05 give up
+timerfd_settime02
+
+// pmu conflict
+perf_event_open02

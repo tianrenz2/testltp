@@ -1,0 +1,15 @@
+Interrupt: 1168
+Syscall: 1016
+Exception: 1481
+CFU: 185
+GFU: 1611
+Random: 0
+IO Input: 1642
+RDTSC: 13055
+Strnlen: 0
+RDSEED: 4
+PTE: 24262
+Inst Sync: 0
+DMA Buf Size: 6668288
+Total Replay Events: 44535
+Time(s): 10.48
